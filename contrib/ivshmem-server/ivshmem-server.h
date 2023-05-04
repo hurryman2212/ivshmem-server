@@ -34,8 +34,9 @@
 
 /**
  * Maximum number of notification vectors supported by the server
+ * (should not be over the limitation of MSI-X which is 2048)
  */
-#define IVSHMEM_SERVER_MAX_VECTORS 64
+#define IVSHMEM_SERVER_MAX_VECTORS 2048
 
 /**
  * Structure storing a peer

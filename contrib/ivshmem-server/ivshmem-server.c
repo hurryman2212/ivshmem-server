@@ -221,33 +221,16 @@ fail:
     return -1;
 }
 
-/* Try to ftruncate a file to next power of 2 of shmsize.
- * If it fails; all power of 2 above shmsize are tested until
- * we reach the maximum huge page size. This is useful
- * if the shm file is in a hugetlbfs that cannot be truncated to the
- * shm_size value. */
 static int
-ivshmem_server_ftruncate(int fd, unsigned shmsize)
+ivshmem_server_ftruncate(int fd, size_t shmsize)
 {
-    int ret;
-    struct stat mapstat;
-
-    /* align shmsize to next power of 2 */
-    shmsize = pow2ceil(shmsize);
-
-    if (fstat(fd, &mapstat) != -1 && mapstat.st_size == shmsize) {
-        return 0;
+    if (shmsize % getpagesize()) {
+        fprintf(stderr, "shmsize should be N * PAGESIZE!\n");
+        exit(EXIT_FAILURE);
     }
-
-    while (shmsize <= IVSHMEM_SERVER_MAX_HUGEPAGE_SIZE) {
-        ret = ftruncate(fd, shmsize);
-        if (ret == 0) {
-            return ret;
-        }
-        shmsize *= 2;
-    }
-
-    return -1;
+    if(ftruncate64(fd, shmsize))
+        return -1;
+    return 0;
 }
 
 /* Init a new ivshmem server */
