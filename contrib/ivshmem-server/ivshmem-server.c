@@ -9,6 +9,8 @@
 #include "qemu/host-utils.h"
 #include "qemu/sockets.h"
 
+#include <linux/memfd.h>
+#include <linux/mman.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 
@@ -20,9 +22,6 @@
             printf(fmt, ## __VA_ARGS__); \
         }                                \
     } while (0)
-
-/** maximum size of a huge page, used by ivshmem_server_ftruncate() */
-#define IVSHMEM_SERVER_MAX_HUGEPAGE_SIZE (1024 * 1024 * 1024)
 
 /** default listen backlog (number of sockets not accepted) */
 #define IVSHMEM_SERVER_LISTEN_BACKLOG 10
@@ -221,25 +220,11 @@ fail:
     return -1;
 }
 
-static int
-ivshmem_server_ftruncate(int fd, size_t shmsize)
-{
-    if (shmsize % getpagesize()) {
-        fprintf(stderr, "shmsize should be N * PAGESIZE!\n");
-        exit(EXIT_FAILURE);
-    }
-    if(ftruncate64(fd, shmsize))
-        return -1;
-    return 0;
-}
-
 /* Init a new ivshmem server */
 int
 ivshmem_server_init(IvshmemServer *server, const char *unix_sock_path,
-                    const char *shm_path, bool use_shm_open,
-                    size_t shm_size, unsigned n_vectors,
-                    bool verbose)
-{
+                        const char *shm_path, size_t shm_size, int use_thp,
+                        size_t page_size, unsigned n_vectors, bool verbose) {
     int ret;
 
     memset(server, 0, sizeof(*server));
@@ -258,9 +243,11 @@ ivshmem_server_init(IvshmemServer *server, const char *unix_sock_path,
         return -1;
     }
 
-    server->use_shm_open = use_shm_open;
     server->shm_size = shm_size;
+    server->use_thp = use_thp;
+    server->page_size = page_size;
     server->n_vectors = n_vectors;
+    server->mapped_addr = NULL;
 
     QTAILQ_INIT(&server->peer_list);
 
@@ -273,30 +260,71 @@ ivshmem_server_start(IvshmemServer *server)
 {
     struct sockaddr_un s_un;
     int shm_fd, sock_fd, ret;
+    void *mapped_addr;
 
-    /* open shm file */
-    if (server->use_shm_open) {
-        IVSHMEM_SERVER_DEBUG(server, "Using POSIX shared memory: %s\n",
-                             server->shm_path);
-        shm_fd = shm_open(server->shm_path, O_CREAT | O_RDWR, S_IRWXU);
+    if (server->use_thp || (server->page_size == sysconf(_SC_PAGESIZE))) {
+        shm_fd = memfd_create(server->shm_path, 0);
+    } else if (server->page_size == (2 * 1024 * 1024)) {
+        /* use explicit 2MB hugepage */
+        shm_fd = memfd_create(server->shm_path, MFD_HUGETLB | MFD_HUGE_2MB);
+        IVSHMEM_SERVER_DEBUG(server, "create 2MB memfd backing\n");
+    } else if (server->page_size == (1024 * 1024 * 1024)) {
+        /* use explicit 1GB hugepage */
+        shm_fd = memfd_create(server->shm_path, MFD_HUGETLB | MFD_HUGE_1GB);
+        IVSHMEM_SERVER_DEBUG(server, "create 1GB memfd backing\n");
     } else {
-        gchar *filename = g_strdup_printf("%s/ivshmem.XXXXXX", server->shm_path);
-        IVSHMEM_SERVER_DEBUG(server, "Using file-backed shared memory: %s\n",
-                             server->shm_path);
-        shm_fd = mkstemp(filename);
-        unlink(filename);
-        g_free(filename);
+        fprintf(stderr, "unsupported page size given (%lu)\n",
+                server->page_size);
+        return -1;
     }
 
     if (shm_fd < 0) {
-        fprintf(stderr, "cannot open shm file %s: %s\n", server->shm_path,
-                strerror(errno));
+        fprintf(stderr, "cannot open memfd backing with name \"%s\": %s\n",
+                server->shm_path, strerror(errno));
         return -1;
     }
-    if (ivshmem_server_ftruncate(shm_fd, server->shm_size) < 0) {
-        fprintf(stderr, "ftruncate(%s) failed: %s\n", server->shm_path,
-                strerror(errno));
+
+    if (ftruncate64(shm_fd, server->shm_size)) {
+        perror("ftruncate64");
         goto err_close_shm;
+    }
+
+    if (server->use_thp) {
+        mapped_addr = mmap(NULL, server->shm_size, PROT_READ | PROT_WRITE,
+                           MAP_SHARED, shm_fd, 0);
+    } else if (server->page_size == (2 * 1024 * 1024)) {
+        mapped_addr = mmap(NULL, server->shm_size, PROT_READ | PROT_WRITE,
+                           MAP_SHARED | MAP_HUGETLB | MAP_HUGE_2MB, shm_fd, 0);
+        IVSHMEM_SERVER_DEBUG(server, "map 2MB hugepages\n");
+    } else if (server->page_size == (1024 * 1024 * 1024)) {
+        mapped_addr = mmap(NULL, server->shm_size, PROT_READ | PROT_WRITE,
+                           MAP_SHARED | MAP_HUGETLB | MAP_HUGE_1GB, shm_fd, 0);
+        IVSHMEM_SERVER_DEBUG(server, "map 1GB hugepages\n");
+    } else {
+        mapped_addr = mmap(NULL, server->shm_size, PROT_READ | PROT_WRITE,
+                           MAP_SHARED, shm_fd, 0);
+    }
+
+    if (mapped_addr == MAP_FAILED) {
+        fprintf(stderr, "cannot map memfd with name \"%s\": %s\n",
+                server->shm_path, strerror(errno));
+        goto err_close_shm;
+    }
+
+    if (server->use_thp) {
+        /* call madvise() for THP */
+        if (madvise(mapped_addr, server->shm_size, MADV_HUGEPAGE)) {
+            perror("madvise");
+            goto err_unmap_shm;
+        }
+        IVSHMEM_SERVER_DEBUG(server, "use transparent hugepages\n");
+    } else if (server->page_size == sysconf(_SC_PAGESIZE)) {
+        /* explicitly ban THP through madvise() */
+        if (madvise(mapped_addr, server->shm_size, MADV_NOHUGEPAGE)) {
+            perror("madvise");
+            goto err_unmap_shm;
+        }
+        IVSHMEM_SERVER_DEBUG(server, "disallow transparent hugepages\n");
     }
 
     IVSHMEM_SERVER_DEBUG(server, "create & bind socket %s\n",
@@ -307,7 +335,7 @@ ivshmem_server_start(IvshmemServer *server)
     if (sock_fd < 0) {
         IVSHMEM_SERVER_DEBUG(server, "cannot create socket: %s\n",
                              strerror(errno));
-        goto err_close_shm;
+        goto err_unmap_shm;
     }
 
     s_un.sun_family = AF_UNIX;
@@ -330,15 +358,15 @@ ivshmem_server_start(IvshmemServer *server)
 
     server->sock_fd = sock_fd;
     server->shm_fd = shm_fd;
+    server->mapped_addr = mapped_addr;
 
     return 0;
 
 err_close_sock:
     close(sock_fd);
+err_unmap_shm:
+    munmap(mapped_addr, server->shm_size);
 err_close_shm:
-    if (server->use_shm_open) {
-        shm_unlink(server->shm_path);
-    }
     close(shm_fd);
     return -1;
 }
@@ -356,10 +384,8 @@ ivshmem_server_close(IvshmemServer *server)
     }
 
     unlink(server->unix_sock_path);
-    if (server->use_shm_open) {
-        shm_unlink(server->shm_path);
-    }
     close(server->sock_fd);
+    munmap(server->mapped_addr, server->shm_size);
     close(server->shm_fd);
     server->sock_fd = -1;
     server->shm_fd = -1;

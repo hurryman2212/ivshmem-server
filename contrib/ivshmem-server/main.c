@@ -30,9 +30,10 @@ typedef struct IvshmemServerArgs {
     const char *pid_file;
     const char *unix_socket_path;
     const char *shm_path;
-    bool use_shm_open;
     uint64_t shm_size;
     unsigned n_vectors;
+    int use_thp;
+    size_t page_size;
 } IvshmemServerArgs;
 
 static void
@@ -42,19 +43,23 @@ ivshmem_server_usage(const char *progname)
            "  -h: show this help\n"
            "  -v: verbose mode\n"
            "  -F: foreground mode (default is to daemonize)\n"
+           "  -T: Use transparent hugepages through madvise()\n"
+           "      This will ignore -H option (default is to disallow THP)\n"
            "  -p <pid-file>: path to the PID file (used in daemon mode only)\n"
            "     default " IVSHMEM_SERVER_DEFAULT_PID_FILE "\n"
            "  -S <unix-socket-path>: path to the unix socket to listen to\n"
            "     default " IVSHMEM_SERVER_DEFAULT_UNIX_SOCK_PATH "\n"
-           "  -M <shm-name>: POSIX shared memory object to use\n"
+           "  -M <memfd-name>: memfd backing name to use\n"
            "     default " IVSHMEM_SERVER_DEFAULT_SHM_PATH "\n"
-           "  -m <dir-name>: where to create shared memory\n"
-           "  -l <size>: size of shared memory in bytes\n"
+           "  -l <shm_size>: size of shared memory in bytes\n"
            "     suffixes K, M and G can be used, e.g. 1K means 1024\n"
            "     default %u\n"
+           "  -P <page_size>: size of pages to allocate\n"
+           "     suffixes K, M and G can be used, e.g. 1K means 1024\n"
+           "     default %ld (use default page size)\n"
            "  -n <nvectors>: number of vectors\n"
            "     default %u\n",
-           progname, IVSHMEM_SERVER_DEFAULT_SHM_SIZE,
+           progname, IVSHMEM_SERVER_DEFAULT_SHM_SIZE, sysconf(_SC_PAGESIZE),
            IVSHMEM_SERVER_DEFAULT_N_VECTORS);
 }
 
@@ -72,7 +77,7 @@ ivshmem_server_parse_args(IvshmemServerArgs *args, int argc, char *argv[])
     unsigned long long v;
     Error *err = NULL;
 
-    while ((c = getopt(argc, argv, "hvFp:S:m:M:l:n:")) != -1) {
+    while ((c = getopt(argc, argv, "hvFTp:S:M:l:P:n:")) != -1) {
 
         switch (c) {
         case 'h': /* help */
@@ -88,6 +93,10 @@ ivshmem_server_parse_args(IvshmemServerArgs *args, int argc, char *argv[])
             args->foreground = 1;
             break;
 
+        case 'T': /* Use transparent hugepages through madvise() */
+            args->use_thp = 1;
+            break;
+
         case 'p': /* pid file */
             args->pid_file = optarg;
             break;
@@ -97,13 +106,20 @@ ivshmem_server_parse_args(IvshmemServerArgs *args, int argc, char *argv[])
             break;
 
         case 'M': /* shm name */
-        case 'm': /* dir name */
             args->shm_path = optarg;
-            args->use_shm_open = c == 'M';
             break;
 
         case 'l': /* shm size */
             if (!parse_option_size("shm_size", optarg, &args->shm_size,
+                                   &err)) {
+                error_report_err(err);
+                ivshmem_server_help(argv[0]);
+                exit(1);
+            }
+            break;
+
+        case 'P': /* hugepage size */
+            if (!parse_option_size("page_size", optarg, &args->page_size,
                                    &err)) {
                 error_report_err(err);
                 ivshmem_server_help(argv[0]);
@@ -195,9 +211,10 @@ main(int argc, char *argv[])
         .pid_file = IVSHMEM_SERVER_DEFAULT_PID_FILE,
         .unix_socket_path = IVSHMEM_SERVER_DEFAULT_UNIX_SOCK_PATH,
         .shm_path = IVSHMEM_SERVER_DEFAULT_SHM_PATH,
-        .use_shm_open = true,
         .shm_size = IVSHMEM_SERVER_DEFAULT_SHM_SIZE,
         .n_vectors = IVSHMEM_SERVER_DEFAULT_N_VECTORS,
+        .use_thp = 0,
+        .page_size = sysconf(_SC_PAGESIZE)
     };
     int ret = 1;
 
@@ -230,9 +247,9 @@ main(int argc, char *argv[])
     }
 
     /* init the ivshms structure */
-    if (ivshmem_server_init(&server, args.unix_socket_path,
-                            args.shm_path, args.use_shm_open,
-                            args.shm_size, args.n_vectors, args.verbose) < 0) {
+    if (ivshmem_server_init(&server, args.unix_socket_path, args.shm_path,
+                            args.shm_size, args.use_thp, args.page_size,
+                            args.n_vectors, args.verbose) < 0) {
         fprintf(stderr, "cannot init server\n");
         goto err;
     }
