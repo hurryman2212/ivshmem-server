@@ -224,7 +224,8 @@ fail:
 int
 ivshmem_server_init(IvshmemServer *server, const char *unix_sock_path,
                         const char *shm_path, size_t shm_size, int use_thp,
-                        size_t page_size, unsigned n_vectors, bool verbose) {
+                        size_t page_size, unsigned n_vectors, bool verbose,
+                        int clear) {
     int ret;
 
     memset(server, 0, sizeof(*server));
@@ -248,6 +249,7 @@ ivshmem_server_init(IvshmemServer *server, const char *unix_sock_path,
     server->page_size = page_size;
     server->n_vectors = n_vectors;
     server->mapped_addr = NULL;
+    server->clear = clear;
 
     QTAILQ_INIT(&server->peer_list);
 
@@ -358,6 +360,12 @@ ivshmem_server_start(IvshmemServer *server)
 
     server->sock_fd = sock_fd;
     server->shm_fd = shm_fd;
+
+    if (server->clear) {
+        IVSHMEM_SERVER_DEBUG(server, "clearing shared memory region...\n");
+        memset(mapped_addr, 0, server->shm_size);
+        IVSHMEM_SERVER_DEBUG(server, "-> done!\n");
+    }
     server->mapped_addr = mapped_addr;
 
     return 0;

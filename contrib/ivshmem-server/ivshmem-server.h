@@ -73,6 +73,7 @@ typedef struct IvshmemServer {
     int use_thp;
     size_t page_size;
     void *mapped_addr;
+    int clear;
 } IvshmemServer;
 
 /**
@@ -83,15 +84,19 @@ typedef struct IvshmemServer {
  * @shm_path:       Path to the shared memory. The path corresponds to a POSIX
  *                  shm name or a hugetlbfs mount point.
  * @shm_size:       Size of shared memory
+ * @use_thp:        To use THP or not
+ * @page_size:      Page size to allocate
  * @n_vectors:      Number of interrupt vectors per client
  * @verbose:        True to enable verbose mode
+ * @clear:          To clear shared memory region or not
  *
  * Returns:         0 on success, or a negative value on error
  */
 int
 ivshmem_server_init(IvshmemServer *server, const char *unix_sock_path,
                         const char *shm_path, size_t shm_size, int use_thp,
-                        size_t page_size, unsigned n_vectors, bool verbose);
+                        size_t page_size, unsigned n_vectors, bool verbose,
+                        int clear);
 
 /**
  * Open the shm, then create and bind to the unix socket

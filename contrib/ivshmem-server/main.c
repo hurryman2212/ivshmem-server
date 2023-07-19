@@ -34,6 +34,7 @@ typedef struct IvshmemServerArgs {
     unsigned n_vectors;
     int use_thp;
     size_t page_size;
+    int clear;
 } IvshmemServerArgs;
 
 static void
@@ -45,6 +46,7 @@ ivshmem_server_usage(const char *progname)
            "  -F: foreground mode (default is to daemonize)\n"
            "  -T: Use transparent hugepages through madvise()\n"
            "      This will ignore -H option (default is to disallow THP)\n"
+           "  -c: clear shared memory region\n"
            "  -p <pid-file>: path to the PID file (used in daemon mode only)\n"
            "     default " IVSHMEM_SERVER_DEFAULT_PID_FILE "\n"
            "  -S <unix-socket-path>: path to the unix socket to listen to\n"
@@ -77,7 +79,7 @@ ivshmem_server_parse_args(IvshmemServerArgs *args, int argc, char *argv[])
     unsigned long long v;
     Error *err = NULL;
 
-    while ((c = getopt(argc, argv, "hvFTp:S:M:l:P:n:")) != -1) {
+    while ((c = getopt(argc, argv, "hvFTcp:S:M:l:P:n:")) != -1) {
 
         switch (c) {
         case 'h': /* help */
@@ -95,6 +97,10 @@ ivshmem_server_parse_args(IvshmemServerArgs *args, int argc, char *argv[])
 
         case 'T': /* Use transparent hugepages through madvise() */
             args->use_thp = 1;
+            break;
+
+        case 'c': /* Clear shared memory region */
+            args->clear = 1;
             break;
 
         case 'p': /* pid file */
@@ -214,7 +220,8 @@ main(int argc, char *argv[])
         .shm_size = IVSHMEM_SERVER_DEFAULT_SHM_SIZE,
         .n_vectors = IVSHMEM_SERVER_DEFAULT_N_VECTORS,
         .use_thp = 0,
-        .page_size = sysconf(_SC_PAGESIZE)
+        .page_size = sysconf(_SC_PAGESIZE),
+        .clear = 0
     };
     int ret = 1;
 
@@ -249,7 +256,7 @@ main(int argc, char *argv[])
     /* init the ivshms structure */
     if (ivshmem_server_init(&server, args.unix_socket_path, args.shm_path,
                             args.shm_size, args.use_thp, args.page_size,
-                            args.n_vectors, args.verbose) < 0) {
+                            args.n_vectors, args.verbose, args.clear) < 0) {
         fprintf(stderr, "cannot init server\n");
         goto err;
     }
