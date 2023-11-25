@@ -95,8 +95,8 @@ typedef struct IvshmemServer {
 int
 ivshmem_server_init(IvshmemServer *server, const char *unix_sock_path,
                         const char *shm_path, size_t shm_size, int use_thp,
-                        size_t page_size, unsigned n_vectors, bool verbose,
-                        int clear);
+                        size_t page_size, unsigned n_vectors, uint16_t init_cnt,
+                        bool verbose, int clear);
 
 /**
  * Open the shm, then create and bind to the unix socket

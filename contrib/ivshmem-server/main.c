@@ -19,6 +19,7 @@
 #define IVSHMEM_SERVER_DEFAULT_SHM_PATH       "ivshmem"
 #define IVSHMEM_SERVER_DEFAULT_SHM_SIZE       (4 * 1024 * 1024)
 #define IVSHMEM_SERVER_DEFAULT_N_VECTORS      1
+#define IVSHMEM_SERVER_DEFAULT_INIT_CNT       3
 
 /* used to quit on signal SIGTERM */
 static int ivshmem_server_quit;
@@ -32,6 +33,7 @@ typedef struct IvshmemServerArgs {
     const char *shm_path;
     uint64_t shm_size;
     unsigned n_vectors;
+    uint16_t init_cnt;
     int use_thp;
     size_t page_size;
     int clear;
@@ -60,9 +62,11 @@ ivshmem_server_usage(const char *progname)
            "     suffixes K, M and G can be used, e.g. 1K means 1024\n"
            "     default %ld (use default page size)\n"
            "  -n <nvectors>: number of vectors\n"
-           "     default %u\n",
+           "     default %u\n"
+           "  -C <init_cnt>: initial connection count\n"
+           "     default %hu\n",
            progname, IVSHMEM_SERVER_DEFAULT_SHM_SIZE, sysconf(_SC_PAGESIZE),
-           IVSHMEM_SERVER_DEFAULT_N_VECTORS);
+           IVSHMEM_SERVER_DEFAULT_N_VECTORS, IVSHMEM_SERVER_DEFAULT_INIT_CNT);
 }
 
 static void
@@ -76,10 +80,10 @@ static void
 ivshmem_server_parse_args(IvshmemServerArgs *args, int argc, char *argv[])
 {
     int c;
-    unsigned long long v;
+    unsigned long long C, v;
     Error *err = NULL;
 
-    while ((c = getopt(argc, argv, "hvFTcp:S:M:l:P:n:")) != -1) {
+    while ((c = getopt(argc, argv, "hvFTcp:S:M:l:P:n:C:")) != -1) {
 
         switch (c) {
         case 'h': /* help */
@@ -140,6 +144,15 @@ ivshmem_server_parse_args(IvshmemServerArgs *args, int argc, char *argv[])
                 exit(1);
             }
             args->n_vectors = v;
+            break;
+
+        case 'C': /* Initial connection count */
+            if (parse_uint_full(optarg, &C, 0) < 0) {
+                fprintf(stderr, "cannot parse init_cnt\n");
+                ivshmem_server_help(argv[0]);
+                exit(1);
+            }
+            args->init_cnt = C;
             break;
 
         default:
@@ -219,6 +232,7 @@ main(int argc, char *argv[])
         .shm_path = IVSHMEM_SERVER_DEFAULT_SHM_PATH,
         .shm_size = IVSHMEM_SERVER_DEFAULT_SHM_SIZE,
         .n_vectors = IVSHMEM_SERVER_DEFAULT_N_VECTORS,
+        .init_cnt = IVSHMEM_SERVER_DEFAULT_INIT_CNT,
         .use_thp = 0,
         .page_size = sysconf(_SC_PAGESIZE),
         .clear = 0
@@ -256,7 +270,8 @@ main(int argc, char *argv[])
     /* init the ivshms structure */
     if (ivshmem_server_init(&server, args.unix_socket_path, args.shm_path,
                             args.shm_size, args.use_thp, args.page_size,
-                            args.n_vectors, args.verbose, args.clear) < 0) {
+                            args.n_vectors, args.init_cnt, args.verbose,
+                            args.clear) < 0) {
         fprintf(stderr, "cannot init server\n");
         goto err;
     }
