@@ -244,7 +244,9 @@ ivshmem_server_init(IvshmemServer *server, const char *unix_sock_path,
         return -1;
     }
 
+    server->shm_fd = -1;
     server->mapped_addr = NULL;
+    server->sock_fd = -1;
 
     server->shm_size = shm_size;
     server->use_thp = use_thp;
@@ -360,6 +362,13 @@ ivshmem_server_start(IvshmemServer *server)
         IVSHMEM_SERVER_DEBUG(server, "populate all pages (W)\n");
     }
 
+    if (server->clear) {
+        IVSHMEM_SERVER_DEBUG(server, "clear shared memory region.\n");
+        memset(mapped_addr, 0, server->shm_size);
+    }
+
+    IVSHMEM_SERVER_DEBUG(server, "virt_addr: %p\n", mapped_addr);
+
     IVSHMEM_SERVER_DEBUG(server, "create & bind socket %s\n",
                          server->unix_sock_path);
 
@@ -389,24 +398,21 @@ ivshmem_server_start(IvshmemServer *server)
         goto err_close_sock;
     }
 
-    server->sock_fd = sock_fd;
     server->shm_fd = shm_fd;
-
-    if (server->clear) {
-        IVSHMEM_SERVER_DEBUG(server, "clearing shared memory region...\n");
-        memset(mapped_addr, 0, server->shm_size);
-        IVSHMEM_SERVER_DEBUG(server, "-> done!\n");
-    }
     server->mapped_addr = mapped_addr;
+    server->sock_fd = sock_fd;
 
     return 0;
 
 err_close_sock:
     close(sock_fd);
+    server->sock_fd = -1;
 err_unmap_shm:
     munmap(mapped_addr, server->shm_size);
+    server->mapped_addr = NULL;
 err_close_shm:
     close(shm_fd);
+    server->shm_fd = -1;
     return -1;
 }
 
@@ -424,9 +430,10 @@ ivshmem_server_close(IvshmemServer *server)
 
     unlink(server->unix_sock_path);
     close(server->sock_fd);
-    munmap(server->mapped_addr, server->shm_size);
-    close(server->shm_fd);
     server->sock_fd = -1;
+    munmap(server->mapped_addr, server->shm_size);
+    server->mapped_addr = NULL;
+    close(server->shm_fd);
     server->shm_fd = -1;
 }
 
