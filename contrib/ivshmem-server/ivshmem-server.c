@@ -266,16 +266,24 @@ ivshmem_server_start(IvshmemServer *server)
     int shm_fd, sock_fd, ret;
     void *mapped_addr;
 
+    if (server->use_thp && (server->page_size != sysconf(_SC_PAGESIZE))) {
+        fprintf(stderr,
+                "unsupported page size given (%lu) when transparent hugepage "
+                "option is enabled\n",
+                server->page_size);
+        return -1;
+    }
+
     if (server->use_thp || (server->page_size == sysconf(_SC_PAGESIZE))) {
         shm_fd = memfd_create(server->shm_path, 0);
     } else if (server->page_size == (2 * 1024 * 1024)) {
         /* use explicit 2MB hugepage */
-        shm_fd = memfd_create(server->shm_path, MFD_HUGETLB | MFD_HUGE_2MB);
         IVSHMEM_SERVER_DEBUG(server, "create 2MB memfd backing\n");
+        shm_fd = memfd_create(server->shm_path, MFD_HUGETLB | MFD_HUGE_2MB);
     } else if (server->page_size == (1024 * 1024 * 1024)) {
         /* use explicit 1GB hugepage */
-        shm_fd = memfd_create(server->shm_path, MFD_HUGETLB | MFD_HUGE_1GB);
         IVSHMEM_SERVER_DEBUG(server, "create 1GB memfd backing\n");
+        shm_fd = memfd_create(server->shm_path, MFD_HUGETLB | MFD_HUGE_1GB);
     } else {
         fprintf(stderr, "unsupported page size given (%lu)\n",
                 server->page_size);
@@ -289,7 +297,7 @@ ivshmem_server_start(IvshmemServer *server)
     }
 
     if (ftruncate64(shm_fd, server->shm_size)) {
-        perror("ftruncate64");
+        fprintf(stderr, "ftruncate() failed: %s\n", strerror(errno));
         goto err_close_shm;
     }
 
@@ -319,18 +327,35 @@ ivshmem_server_start(IvshmemServer *server)
 
     if (server->use_thp) {
         /* call madvise() for THP */
+        IVSHMEM_SERVER_DEBUG(server, "use transparent hugepages\n");
         if (madvise(mapped_addr, server->shm_size, MADV_HUGEPAGE)) {
-            perror("madvise");
+            fprintf(stderr, "madvise(MADV_HUGEPAGE) failed: %s\n",
+                    strerror(errno));
             goto err_unmap_shm;
         }
-        IVSHMEM_SERVER_DEBUG(server, "use transparent hugepages\n");
     } else if (server->page_size == sysconf(_SC_PAGESIZE)) {
         /* explicitly ban THP through madvise() */
+        IVSHMEM_SERVER_DEBUG(server, "disallow transparent hugepages\n");
         if (madvise(mapped_addr, server->shm_size, MADV_NOHUGEPAGE)) {
-            perror("madvise");
+            fprintf(stderr, "madvise(MADV_NOHUGEPAGE) failed: %s\n",
+                    strerror(errno));
             goto err_unmap_shm;
         }
-        IVSHMEM_SERVER_DEBUG(server, "disallow transparent hugepages\n");
+    }
+
+    if (server->page_size == sysconf(_SC_PAGESIZE)) {
+        if (madvise(mapped_addr, server->shm_size, MADV_POPULATE_READ)) {
+            fprintf(stderr, "madvise(MADV_POPULATE_READ) failed: %s\n",
+                    strerror(errno));
+            goto err_unmap_shm;
+        }
+        IVSHMEM_SERVER_DEBUG(server, "populate all pages (R)\n");
+        if (madvise(mapped_addr, server->shm_size, MADV_POPULATE_WRITE)) {
+            fprintf(stderr, "madvise(MADV_POPULATE_WRITE) failed: %s\n",
+                    strerror(errno));
+            goto err_unmap_shm;
+        }
+        IVSHMEM_SERVER_DEBUG(server, "populate all pages (W)\n");
     }
 
     IVSHMEM_SERVER_DEBUG(server, "create & bind socket %s\n",
