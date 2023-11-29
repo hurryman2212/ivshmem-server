@@ -266,6 +266,8 @@ ivshmem_server_start(IvshmemServer *server)
     int shm_fd, sock_fd, ret;
     void *mapped_addr;
 
+    IVSHMEM_SERVER_DEBUG(server, "pid: %d\n", getpid());
+
     if (server->use_thp && (server->page_size != sysconf(_SC_PAGESIZE))) {
         fprintf(stderr,
                 "unsupported page size given (%lu) when transparent hugepage "
