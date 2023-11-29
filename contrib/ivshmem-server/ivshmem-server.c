@@ -297,12 +297,14 @@ ivshmem_server_start(IvshmemServer *server)
         mapped_addr = mmap(NULL, server->shm_size, PROT_READ | PROT_WRITE,
                            MAP_SHARED, shm_fd, 0);
     } else if (server->page_size == (2 * 1024 * 1024)) {
-        mapped_addr = mmap(NULL, server->shm_size, PROT_READ | PROT_WRITE,
-                           MAP_SHARED | MAP_HUGETLB | MAP_HUGE_2MB, shm_fd, 0);
+        mapped_addr = mmap(
+            NULL, server->shm_size, PROT_READ | PROT_WRITE,
+            MAP_SHARED | MAP_POPULATE | MAP_HUGETLB | MAP_HUGE_2MB, shm_fd, 0);
         IVSHMEM_SERVER_DEBUG(server, "map 2MB hugepages\n");
     } else if (server->page_size == (1024 * 1024 * 1024)) {
-        mapped_addr = mmap(NULL, server->shm_size, PROT_READ | PROT_WRITE,
-                           MAP_SHARED | MAP_HUGETLB | MAP_HUGE_1GB, shm_fd, 0);
+        mapped_addr = mmap(
+            NULL, server->shm_size, PROT_READ | PROT_WRITE,
+            MAP_SHARED | MAP_POPULATE | MAP_HUGETLB | MAP_HUGE_1GB, shm_fd, 0);
         IVSHMEM_SERVER_DEBUG(server, "map 1GB hugepages\n");
     } else {
         mapped_addr = mmap(NULL, server->shm_size, PROT_READ | PROT_WRITE,
