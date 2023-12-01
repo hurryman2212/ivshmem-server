@@ -70,10 +70,12 @@ typedef struct IvshmemServer {
     uint16_t cur_id;                 /**< id to be given to next client */
     bool verbose;                    /**< true in verbose mode */
     QTAILQ_HEAD(, IvshmemServerPeer) peer_list; /**< list of peers */
-    int use_thp;
-    size_t page_size;
+
     void *mapped_addr;
-    int clear;
+
+    long page_size;
+    bool thp;
+    bool clear;
 } IvshmemServer;
 
 /**
@@ -81,22 +83,21 @@ typedef struct IvshmemServer {
  *
  * @server:         A pointer to an uninitialized IvshmemServer structure
  * @unix_sock_path: The pointer to the unix socket file name
- * @shm_path:       Path to the shared memory. The path corresponds to a POSIX
- *                  shm name or a hugetlbfs mount point.
+ * @shm_path:       Path to the shared memory.
  * @shm_size:       Size of shared memory
- * @use_thp:        To use THP or not
- * @page_size:      Page size to allocate
  * @n_vectors:      Number of interrupt vectors per client
- * @verbose:        True to enable verbose mode
+ * @page_size:      Page size to allocate
+ * @thp:            To use THP or not
  * @clear:          To clear shared memory region or not
+ * @verbose:        True to enable verbose mode
  *
  * Returns:         0 on success, or a negative value on error
  */
 int
 ivshmem_server_init(IvshmemServer *server, const char *unix_sock_path,
-                        const char *shm_path, size_t shm_size, int use_thp,
-                        size_t page_size, unsigned n_vectors, uint16_t init_cnt,
-                        bool verbose, int clear);
+                        const char *shm_path, size_t shm_size,
+                        unsigned n_vectors, long page_size, bool thp,
+                        bool clear, bool verbose);
 
 /**
  * Open the shm, then create and bind to the unix socket

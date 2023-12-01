@@ -223,9 +223,9 @@ fail:
 /* Init a new ivshmem server */
 int
 ivshmem_server_init(IvshmemServer *server, const char *unix_sock_path,
-                        const char *shm_path, size_t shm_size, int use_thp,
-                        size_t page_size, unsigned n_vectors, uint16_t init_cnt,
-                        bool verbose, int clear) {
+                        const char *shm_path, size_t shm_size,
+                        unsigned n_vectors, long page_size, bool thp,
+                        bool clear, bool verbose) {
     int ret;
 
     memset(server, 0, sizeof(*server));
@@ -244,15 +244,15 @@ ivshmem_server_init(IvshmemServer *server, const char *unix_sock_path,
         return -1;
     }
 
+    server->sock_fd = -1;
     server->shm_fd = -1;
     server->mapped_addr = NULL;
-    server->sock_fd = -1;
 
     server->shm_size = shm_size;
-    server->use_thp = use_thp;
-    server->page_size = page_size;
     server->n_vectors = n_vectors;
-    server->cur_id = init_cnt;
+
+    server->page_size = page_size;
+    server->thp = thp;
     server->clear = clear;
 
     QTAILQ_INIT(&server->peer_list);
@@ -270,7 +270,7 @@ ivshmem_server_start(IvshmemServer *server)
 
     IVSHMEM_SERVER_DEBUG(server, "pid: %d\n", getpid());
 
-    if (server->use_thp && (server->page_size != sysconf(_SC_PAGESIZE))) {
+    if (server->thp && server->page_size != sysconf(_SC_PAGESIZE)) {
         fprintf(stderr,
                 "unsupported page size given (%lu) when transparent hugepage "
                 "option is enabled\n",
@@ -278,7 +278,7 @@ ivshmem_server_start(IvshmemServer *server)
         return -1;
     }
 
-    if (server->use_thp || (server->page_size == sysconf(_SC_PAGESIZE))) {
+    if (server->thp || server->page_size == sysconf(_SC_PAGESIZE)) {
         shm_fd = memfd_create(server->shm_path, 0);
     } else if (server->page_size == (2 * 1024 * 1024)) {
         /* use explicit 2MB hugepage */
@@ -305,7 +305,7 @@ ivshmem_server_start(IvshmemServer *server)
         goto err_close_shm;
     }
 
-    if (server->use_thp) {
+    if (server->thp) {
         mapped_addr = mmap(NULL, server->shm_size, PROT_READ | PROT_WRITE,
                            MAP_SHARED, shm_fd, 0);
     } else if (server->page_size == (2 * 1024 * 1024)) {
@@ -329,7 +329,7 @@ ivshmem_server_start(IvshmemServer *server)
         goto err_close_shm;
     }
 
-    if (server->use_thp) {
+    if (server->thp) {
         /* call madvise() for THP */
         IVSHMEM_SERVER_DEBUG(server, "use transparent hugepages\n");
         if (madvise(mapped_addr, server->shm_size, MADV_HUGEPAGE)) {
